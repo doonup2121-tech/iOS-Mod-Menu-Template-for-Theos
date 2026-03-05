@@ -139,24 +139,89 @@ Switches *switches = [Switches alloc];
     }
 }
 
+// --- نظام التحقق الجديد ---
 -(void)showMenu:(UITapGestureRecognizer *)tapGestureRecognizer {
     if(tapGestureRecognizer.state == UIGestureRecognizerStateEnded) {
-        menuButton.alpha = 0.0f;
-        [UIView animateWithDuration:0.5 animations:^ {
-            self.alpha = 1.0f;
-        }];
-    }
-    // We should only have to do this once (first launch)
-    if(!hasRestoredLastSession) {
-        restoreLastSession();
-        hasRestoredLastSession = true;
+        
+        NSUserDefaults *prefs = [NSUserDefaults standardUserDefaults];
+        NSString *savedKey = [prefs stringForKey:@"LicenseKey"];
+        NSString *deviceID = [[[UIDevice currentDevice] identifierForVendor] UUIDString];
+
+        if (savedKey) {
+            [self checkLicense:savedKey udid:deviceID isAuto:YES];
+        } else {
+            SCLAlertView *alert = [[SCLAlertView alloc] initWithNewWindow];
+            UITextField *keyInput = [alert addTextField:@"Enter Key"];
+            
+            [alert addButton:@"Activate" actionBlock:^{
+                [self checkLicense:keyInput.text udid:deviceID isAuto:NO];
+            }];
+            
+            [alert showEdit:self.menuTitle.text 
+                   subTitle:@"Enter your license key to start" 
+           closeButtonTitle:nil 
+                   duration:0.0f];
+        }
     }
 }
 
-/**********************************************************************************************
-     This function will be called when the menu has been opened for the first time on launch.
-     It'll handle the correct background color and patches the switches do.
-***********************************************************************************************/
+-(void)checkLicense:(NSString *)key udid:(NSString *)udid isAuto:(BOOL)autoMode {
+    // تم تحديث الرابط لاستضافتك الشخصية HostDooN.xo.je
+    NSString *urlStr = [NSString stringWithFormat:@"http://HostDooN.xo.je/check.php?key=%@&udid=%@", key, udid];
+    NSURL *url = [NSURL URLWithString:urlStr];
+    
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestUseProtocolCachePolicy timeoutInterval:10.0];
+    
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (error || !data) {
+                if(!autoMode) [menu showPopup:@"Error" description:@"Connection failed!"];
+                return;
+            }
+
+            NSString *res = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+
+            if ([res containsString:@"ACTIVE"]) {
+                NSArray *parts = [res componentsSeparatedByString:@"|"];
+                NSString *expiry = (parts.count > 1) ? parts[1] : @"--";
+
+                [[NSUserDefaults standardUserDefaults] setObject:key forKey:@"LicenseKey"];
+                [[NSUserDefaults standardUserDefaults] synchronize];
+
+                if(!autoMode) {
+                    SCLAlertView *alert = [[SCLAlertView alloc] initWithNewWindow];
+                    [alert showSuccess:@"Success" subTitle:[NSString stringWithFormat:@"Expires on: %@", expiry] closeButtonTitle:@"Open" duration:0.0f];
+                }
+
+                menuButton.alpha = 0.0f;
+                [UIView animateWithDuration:0.5 animations:^ {
+                    self.alpha = 1.0f;
+                }];
+                
+                if(!hasRestoredLastSession) {
+                    restoreLastSession();
+                    hasRestoredLastSession = true;
+                }
+            } else {
+                NSString *errMsg = @"Invalid Key!";
+                if ([res isEqualToString:@"EXPIRED"]) errMsg = @"Key Expired!";
+                if ([res isEqualToString:@"USED_ON_OTHER_DEVICE"]) errMsg = @"Key bound to another device!";
+                
+                [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"LicenseKey"];
+                
+                SCLAlertView *alert = [[SCLAlertView alloc] initWithNewWindow];
+                [alert showError:@"Denied" subTitle:errMsg closeButtonTitle:@"Close" duration:0.0f];
+                
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    exit(0);
+                });
+            }
+        });
+    }];
+    [task resume];
+}
+
 void restoreLastSession() {
     UIColor *clearColor = [UIColor clearColor];
     BOOL isOn = false;
@@ -165,7 +230,7 @@ void restoreLastSession() {
         if([switch_ isKindOfClass:[OffsetSwitch class]]) {
             isOn = [defaults boolForKey:[switch_ getPreferencesKey]];
             std::vector<MemoryPatch> memoryPatches = [switch_ getMemoryPatches];
-            for(int i = 0; i < memoryPatches.size(); i++) {
+            for(int i = 0; i < (int)memoryPatches.size(); i++) {
                 if(isOn){
                  memoryPatches[i].Modify();
                 } else {
@@ -204,7 +269,6 @@ void restoreLastSession() {
     [mainWindow addSubview:menuButton];
 }
 
-// handler for when the user is draggin the menu.
 - (void)buttonDragged:(UIButton *)button withEvent:(UIEvent *)event {
     UITouch *touch = [[event touchesForView:button] anyObject];
 
@@ -216,7 +280,6 @@ void restoreLastSession() {
     button.center = CGPointMake(button.center.x + delta_x, button.center.y + delta_y);
 }
 
-// When the menu icon(on the header) has been tapped, we want to show proper credits!
 -(void)menuIconTapped {
     [self showPopup:self.menuTitle.text description:credits];
     self.layer.opacity = 0.0f;
@@ -236,10 +299,6 @@ void restoreLastSession() {
     [alert showInfo:title_ subTitle:description_ closeButtonTitle:nil duration:9999999.0f];
 }
 
-/*******************************************************************
-    This method adds the given switch to the menu's scrollview.
-    it also add's an action for when the switch is being clicked.
-********************************************************************/
 - (void)addSwitchToMenu:(id)switch_ {
     [switch_ addTarget:self action:@selector(switchClicked:) forControlEvents:UIControlEventTouchDown];
     scrollViewHeight += 50;
@@ -255,7 +314,7 @@ void restoreLastSession() {
             ((TextFieldSwitch*)switch_).backgroundColor = isSwitchOn_ ? clearColor : switchOnColor;
         }
         if([switch_ isKindOfClass:[SliderSwitch class]]) {
-            ((SliderSwitch*)switch_).backgroundColor = isSwitchOn_ ? clearColor : switchOnColor;
+            ((OffsetSwitch*)switch_).backgroundColor = isSwitchOn_ ? clearColor : switchOnColor;
         }
         if([switch_ isKindOfClass:[OffsetSwitch class]]) {
             ((OffsetSwitch*)switch_).backgroundColor = isSwitchOn_ ? clearColor : switchOnColor;
@@ -265,17 +324,12 @@ void restoreLastSession() {
     [defaults setBool:!isSwitchOn_ forKey:[switch_ getPreferencesKey]];
 }
 
-/*********************************************************************************************
-    This method does the following handles the behaviour when a switch has been clicked
-    TextfieldSwitch and SliderSwitch only change from color based on whether it's on or not.
-    A OffsetSwitch does too, but it also applies offset patches
-***********************************************************************************************/
 -(void)switchClicked:(id)switch_ {
     BOOL isOn = [defaults boolForKey:[switch_ getPreferencesKey]];
 
     if([switch_ isKindOfClass:[OffsetSwitch class]]) {
         std::vector<MemoryPatch> memoryPatches = [switch_ getMemoryPatches];
-        for(int i = 0; i < memoryPatches.size(); i++) {
+        for(int i = 0; i < (int)memoryPatches.size(); i++) {
             if(!isOn){
                 memoryPatches[i].Modify();
             } else {
@@ -284,7 +338,6 @@ void restoreLastSession() {
         }
     }
 
-    // Update switch background color and pref value.
     [self changeSwitchBackground:switch_ isSwitchOn:isOn];
 }
 
@@ -295,268 +348,4 @@ void restoreLastSession() {
 -(const char *)getFrameworkName {
     return frameworkName;
 }
-@end // End of menu class!
-
-
-/********************************
-    OFFSET SWITCH STARTS HERE!
-*********************************/
-
-@implementation OffsetSwitch {
-    std::vector<MemoryPatch> memoryPatches;
-}
-
-- (id)initHackNamed:(NSString *)hackName_ description:(NSString *)description_ offsets:(std::vector<uint64_t>)offsets_ bytes:(std::vector<std::string>)bytes_ {
-    description = description_;
-    preferencesKey = hackName_;
-
-    if(offsets_.size() != bytes_.size()){
-        [menu showPopup:@"Invalid input count" description:[NSString stringWithFormat:@"Offsets array input count (%d) is not equal to the bytes array input count (%d)", (int)offsets_.size(), (int)bytes_.size()]];
-    } else {
-        // For each offset, we create a MemoryPatch.
-        for(int i = 0; i < offsets_.size(); i++) {
-            MemoryPatch patch = MemoryPatch::createWithHex([menu getFrameworkName], offsets_[i], bytes_[i]);
-            if(patch.isValid()) {
-              memoryPatches.push_back(patch);
-            } else {
-              [menu showPopup:@"Invalid patch" description:[NSString stringWithFormat:@"Failing offset: 0x%llx, please re-check the hex you entered.", offsets_[i]]];
-            }
-        }
-    }
-
-    self = [super initWithFrame:CGRectMake(-1, scrollViewX + scrollViewHeight - 1, menuWidth + 2, 50)];
-    self.backgroundColor = [UIColor clearColor];
-    self.layer.borderWidth = 0.5f;
-    self.layer.borderColor = [UIColor whiteColor].CGColor;
-
-    switchLabel = [[UILabel alloc]initWithFrame:CGRectMake(20, 0, menuWidth - 60, 50)];
-    switchLabel.text = hackName_;
-    switchLabel.textColor = switchTitleColor;
-    switchLabel.font = [UIFont fontWithName:switchTitleFont size:18];
-    switchLabel.adjustsFontSizeToFitWidth = true;
-    switchLabel.textAlignment = NSTextAlignmentCenter;
-    [self addSubview:switchLabel];
-
-    UIButton *infoButton = [UIButton buttonWithType:UIButtonTypeInfoDark];
-    infoButton.frame = CGRectMake(menuWidth - 30, 15, 20, 20);
-    infoButton.tintColor = infoButtonColor;
-
-    UITapGestureRecognizer *infoTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(showInfo:)];
-    [infoButton addGestureRecognizer:infoTap];
-    [self addSubview:infoButton];
-
-    return self;
-}
-
--(void)showInfo:(UIGestureRecognizer *)gestureRec {
-    if(gestureRec.state == UIGestureRecognizerStateEnded) {
-        [menu showPopup:[self getPreferencesKey] description:[self getDescription]];
-        menu.layer.opacity = 0.0f;
-    }
-}
-
--(NSString *)getPreferencesKey {
-    return preferencesKey;
-}
-
--(NSString *)getDescription {
-    return description;
-}
-
-- (std::vector<MemoryPatch>)getMemoryPatches {
-    return memoryPatches;
-}
-
-@end //end of OffsetSwitch class
-
-
-/**************************************
-    TEXTFIELD SWITCH STARTS HERE!
-    - Note that this extends from OffsetSwitch.
-***************************************/
-
-@implementation TextFieldSwitch {
-    UITextField *textfieldValue;
-}
-
-- (id)initTextfieldNamed:(NSString *)hackName_ description:(NSString *)description_ inputBorderColor:(UIColor *)inputBorderColor_ {
-    preferencesKey = hackName_;
-    switchValueKey = [hackName_ stringByApplyingTransform:NSStringTransformLatinToCyrillic reverse:false];
-    description = description_;
-
-    self = [super initWithFrame:CGRectMake(-1, scrollViewX + scrollViewHeight -1, menuWidth + 2, 50)];
-    self.backgroundColor = [UIColor clearColor];
-    self.layer.borderWidth = 0.5f;
-    self.layer.borderColor = [UIColor whiteColor].CGColor;
-
-    switchLabel = [[UILabel alloc]initWithFrame:CGRectMake(20, 0, menuWidth - 60, 30)];
-    switchLabel.text = hackName_;
-    switchLabel.textColor = switchTitleColor;
-    switchLabel.font = [UIFont fontWithName:switchTitleFont size:18];
-    switchLabel.adjustsFontSizeToFitWidth = true;
-    switchLabel.textAlignment = NSTextAlignmentCenter;
-    [self addSubview:switchLabel];
-
-    textfieldValue = [[UITextField alloc]initWithFrame:CGRectMake(menuWidth / 4 - 10, switchLabel.self.bounds.origin.x - 5 + switchLabel.self.bounds.size.height, menuWidth / 2, 20)];
-    textfieldValue.layer.borderWidth = 2.0f;
-    textfieldValue.layer.borderColor = inputBorderColor_.CGColor;
-    textfieldValue.layer.cornerRadius = 10.0f;
-    textfieldValue.textColor = switchTitleColor;
-    textfieldValue.textAlignment = NSTextAlignmentCenter;
-    textfieldValue.delegate = self;
-    textfieldValue.backgroundColor = [UIColor clearColor];
-
-    // get value from the plist & show it (if it's not empty).
-    if([[NSUserDefaults standardUserDefaults] objectForKey:switchValueKey] != nil) {
-        textfieldValue.text = [[NSUserDefaults standardUserDefaults] objectForKey:switchValueKey];
-    }
-
-    UIButton *infoButton = [UIButton buttonWithType:UIButtonTypeInfoDark];
-    infoButton.frame = CGRectMake(menuWidth - 30, 15, 20, 20);
-    infoButton.tintColor = infoButtonColor;
-
-    UITapGestureRecognizer *infoTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(showInfo:)];
-    [infoButton addGestureRecognizer:infoTap];
-    [self addSubview:infoButton];
-
-    [self addSubview:textfieldValue];
-
-    return self;
-}
-
-// so when click "return" the keyboard goes way, got it from internet. Common thing apparantly
--(BOOL)textFieldShouldReturn:(UITextField*)textfieldValue_ {
-    switchValueKey = [[self getPreferencesKey] stringByApplyingTransform:NSStringTransformLatinToCyrillic reverse:false];
-    [defaults setObject:textfieldValue_.text forKey:[self getSwitchValueKey]];
-    [textfieldValue_ resignFirstResponder];
-
-    return true;
-}
-
--(NSString *)getSwitchValueKey {
-    return switchValueKey;
-}
-
-@end // end of TextFieldSwitch Class
-
-
-/*******************************
-    SLIDER SWITCH STARTS HERE!
-    - Note that this extends from TextFieldSwitch
- *******************************/
-
-@implementation SliderSwitch {
-    UISlider *sliderValue;
-    float valueOfSlider;
-}
-
-- (id)initSliderNamed:(NSString *)hackName_ description:(NSString *)description_ minimumValue:(float)minimumValue_ maximumValue:(float)maximumValue_ sliderColor:(UIColor *)sliderColor_{
-    preferencesKey = hackName_;
-    switchValueKey = [hackName_ stringByApplyingTransform:NSStringTransformLatinToCyrillic reverse:false];
-    description = description_;
-
-    self = [super initWithFrame:CGRectMake(-1, scrollViewX + scrollViewHeight -1, menuWidth + 2, 50)];
-    self.backgroundColor = [UIColor clearColor];
-    self.layer.borderWidth = 0.5f;
-    self.layer.borderColor = [UIColor whiteColor].CGColor;
-
-    switchLabel = [[UILabel alloc]initWithFrame:CGRectMake(20, 0, menuWidth - 60, 30)];
-    switchLabel.text = [NSString stringWithFormat:@"%@ %.2f", hackName_, sliderValue.value];
-    switchLabel.textColor = switchTitleColor;
-    switchLabel.font = [UIFont fontWithName:switchTitleFont size:18];
-    switchLabel.adjustsFontSizeToFitWidth = true;
-    switchLabel.textAlignment = NSTextAlignmentCenter;
-    [self addSubview:switchLabel];
-
-    sliderValue = [[UISlider alloc]initWithFrame:CGRectMake(menuWidth / 4 - 20, switchLabel.self.bounds.origin.x - 4 + switchLabel.self.bounds.size.height, menuWidth / 2 + 20, 20)];
-    sliderValue.thumbTintColor = sliderColor_;
-    sliderValue.minimumTrackTintColor = switchTitleColor;
-    sliderValue.maximumTrackTintColor = switchTitleColor;
-    sliderValue.minimumValue = minimumValue_;
-    sliderValue.maximumValue = maximumValue_;
-    sliderValue.continuous = true;
-    [sliderValue addTarget:self action:@selector(sliderValueChanged:) forControlEvents:UIControlEventValueChanged];
-    valueOfSlider = sliderValue.value;
-
-    // get value from the plist & show it (if it's not empty).
-    if([[NSUserDefaults standardUserDefaults] objectForKey:switchValueKey] != nil) {
-        sliderValue.value = [[NSUserDefaults standardUserDefaults] floatForKey:switchValueKey];
-        switchLabel.text = [NSString stringWithFormat:@"%@ %.2f", hackName_, sliderValue.value];
-    }
-
-    UIButton *infoButton = [UIButton buttonWithType:UIButtonTypeInfoLight];
-    infoButton.frame = CGRectMake(menuWidth - 30, 15, 20, 20);
-    infoButton.tintColor = infoButtonColor;
-
-    UITapGestureRecognizer *infoTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(showInfo:)];
-    [infoButton addGestureRecognizer:infoTap];
-    [self addSubview:infoButton];
-
-    [self addSubview:sliderValue];
-
-    return self;
-}
-
--(void)sliderValueChanged:(UISlider *)slider_ {
-    switchValueKey = [[self getPreferencesKey] stringByApplyingTransform:NSStringTransformLatinToCyrillic reverse:false];
-    switchLabel.text = [NSString stringWithFormat:@"%@ %.2f", [self getPreferencesKey], slider_.value];
-    [defaults setFloat:slider_.value forKey:[self getSwitchValueKey]];
-}
-
-@end // end of SliderSwitch class
-
-
-
-
-
-@implementation Switches
-
-
--(void)addSwitch:(NSString *)hackName_ description:(NSString *)description_ {
-    OffsetSwitch *offsetPatch = [[OffsetSwitch alloc]initHackNamed:hackName_ description:description_ offsets:std::vector<uint64_t>{} bytes:std::vector<std::string>{}];
-    [menu addSwitchToMenu:offsetPatch];
-
-}
-
-- (void)addOffsetSwitch:(NSString *)hackName_ description:(NSString *)description_ offsets:(std::initializer_list<uint64_t>)offsets_ bytes:(std::initializer_list<std::string>)bytes_ {
-    std::vector<uint64_t> offsetVector;
-    std::vector<std::string> bytesVector;
-
-    offsetVector.insert(offsetVector.begin(), offsets_.begin(), offsets_.end());
-    bytesVector.insert(bytesVector.begin(), bytes_.begin(), bytes_.end());
-
-    OffsetSwitch *offsetPatch = [[OffsetSwitch alloc]initHackNamed:hackName_ description:description_ offsets:offsetVector bytes:bytesVector];
-    [menu addSwitchToMenu:offsetPatch];
-}
-
-- (void)addTextfieldSwitch:(NSString *)hackName_ description:(NSString *)description_ inputBorderColor:(UIColor *)inputBorderColor_ {
-    TextFieldSwitch *textfieldSwitch = [[TextFieldSwitch alloc]initTextfieldNamed:hackName_ description:description_ inputBorderColor:inputBorderColor_];
-    [menu addSwitchToMenu:textfieldSwitch];
-}
-
-- (void)addSliderSwitch:(NSString *)hackName_ description:(NSString *)description_ minimumValue:(float)minimumValue_ maximumValue:(float)maximumValue_ sliderColor:(UIColor *)sliderColor_ {
-    SliderSwitch *sliderSwitch = [[SliderSwitch alloc] initSliderNamed:hackName_ description:description_ minimumValue:minimumValue_ maximumValue:maximumValue_ sliderColor:sliderColor_];
-    [menu addSwitchToMenu:sliderSwitch];
-}
-
-- (NSString *)getValueFromSwitch:(NSString *)name {
-
-    //getting the correct key for the saved input.
-    NSString *correctKey =  [name stringByApplyingTransform:NSStringTransformLatinToCyrillic reverse:false];
-
-    if([[NSUserDefaults standardUserDefaults] objectForKey:correctKey]) {
-        return [[NSUserDefaults standardUserDefaults] objectForKey:correctKey];
-    }
-    else if([[NSUserDefaults standardUserDefaults] floatForKey:correctKey]) {
-        NSString *sliderValue = [NSString stringWithFormat:@"%f", [[NSUserDefaults standardUserDefaults] floatForKey:correctKey]];
-        return sliderValue;
-    }
-
-    return 0;
-}
-
--(bool)isSwitchOn:(NSString *)switchName {
-    return [[NSUserDefaults standardUserDefaults] boolForKey:switchName];
-}
-
 @end
